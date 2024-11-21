@@ -1,0 +1,397 @@
+#!/bin/bash
+
+source ~/.bash_profile
+BASEDIR=$(dirname $0)
+INITIAL_DIRECTORY=$(pwd)
+
+# We load sources for Teams notification
+source $BASEDIR/lib/teamsNotification
+
+
+function execute_sql_on_cdb() {
+	# Execute SQL on Container Database
+	local sql="$1"
+	echo "$sql"
+	echo "$sql" | sqlplus / as sysdba
+}
+
+function execute_sql_on_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql="$1"
+	local pdbs_array="$2"
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+		echo "$sql"
+		echo "$sql" | sqlplus / as sysdba
+	done
+}
+
+function get_tstz_value() {
+	tstz_query=$(echo "select 'x==x' || version || 'x==x' from v\$timezone_file;" | sqlplus / as sysdba)
+	tstz_value=$(echo $tstz_query | awk -F'SQL>' '{print $2}' | awk -F 'x==x' '{print $2}')
+
+	echo "TSTZ value : $tstz_value"
+}
+
+function display_tstz_value() {
+	local contain_pdb="$1"
+	local pdbs_array="$2"
+
+	echo "================================================================"
+	echo "=== Display TSTZ value"
+	echo "==="
+
+	if [ "$contain_pdb" = "true" ]; then
+		for pdb in "${pdbs_array[@]}";
+		do
+			# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+			export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+			echo "===> pdb : $pdb <==="
+			get_tstz_value
+		done
+	else
+		echo "===> CDB <==="
+		get_tstz_value
+	fi
+
+	echo "==="
+	echo "================================================================"
+}
+
+# Query to detect each pdb
+pdbs_query_result=$(echo "select 'x==x' || name || 'x==x' from v\$pdbs;" | sqlplus / as sysdba)
+pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -F 'x==x' '{print $2}')
+db_contain_pdbs=false
+pdbs=() # We define an empty array of pdb
+if [ ! -z "$pdb" ]; then
+	db_contain_pdbs=true
+
+	echo "The database server contains one or more PDB"
+	echo "The first PDB found is $pdb"
+
+	# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   	export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+
+	# 
+	# all the pdb are browsed, even PDB$SEED since it is used as a template by oracle when a new pdb is created
+    pdbs+=("$pdb")
+    step=2
+    while [ ! -z "$pdb" ]
+    do
+        ((step+=2))
+        pdb=$(echo $pdbs | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
+	    pdbs+=("$pdb")
+
+		echo "-----------------------"
+	    echo "Another PDB was found : $pdb"
+    done
+else
+	echo "This CDB doesn't contain PDB"
+	get_tstz_value
+fi
+
+# We display TSTZ value for information before the update
+display_tstz_value db_contain_pdbs pdbs
+
+echo "Disk space verification"
+DISK_FREE_LIMIT=$((1024*1024*11)) # 11 Go (by default 'df' display bytes)
+df=$(df -P)
+diskFree=$(echo "$df" | awk '{ print $4 " " $6 }' | grep -vE '^Filesystem|tmpfs|cdrom|/boot|/dev|/run|/home|/sys|/filer|/data636|/mnt|/refresh' | awk '{ print $1 }' | sed 1d)
+for dfree in $diskFree
+do
+	if [ $dfree -lt $DISK_FREE_LIMIT ]; then
+		echo "ERROR: the server needs at least 11Go disk free in order to execute the oracle patch"
+		exit 1
+	fi
+done
+
+echo "Disk space is sufficient to apply the patch"
+echo "Check that the script is being executed as an oracle user"
+if [ "$(whoami)" != "oracle" ]; then
+    echo "ERROR: you should execute this script as an oracle user"
+	exit 1
+fi
+
+echo "Tests the existence of ORACLE_BASE"
+if [ -z "$ORACLE_BASE" ] || [ ! -d "$ORACLE_BASE" ]; then
+	echo "ERROR: the environment variable ORACLE_BASE is incorrect: empty or targets on a non existing directory. ORACLE_BASE=$ORACLE_BASE"
+	exit 1
+fi
+
+echo "Tests the existence of ORACLE_HOME"
+if [ -z "$ORACLE_HOME" ] || [ ! -d "$ORACLE_HOME" ]; then
+	echo "ERROR: the environment variable ORACLE_HOME is incorrect: empty or targets on a non existing directory. ORACLE_HOME=$ORACLE_HOME"
+	exit 1
+fi
+
+echo "Tests the existence of patch_oracle.conf"
+if [ ! -f $BASEDIR/patch_oracle.conf ] || [ ! -r $BASEDIR/patch_oracle.conf ]; then
+	echo "ERROR: Impossible to read $BASEDIR/patch_oracle.conf"
+	exit 1
+fi
+
+
+echo "Read of $BASEDIR/patch_oracle.conf"
+declare -A properties
+configuration_file="$BASEDIR/patch_oracle.conf"
+while IFS='=' read -r key value; do
+    # Read of patch_oracle.conf (properties file), we remove comments of type # ... using the sed command
+    value=$(echo $value | sed 's/[[:space:]]//g' | sed 's/\#.*//g')
+    if [ ! -z "$key" ]; then # If a line is empty, then key is empty
+        properties["$key"]="$value"
+    fi
+done < "$configuration_file"
+
+echo "Extract values from $BASEDIR/patch_oracle.conf"
+oracle_opatch_fullpath=${properties["oracle.opatch.fullpath"]}
+oracle_patch_fullpath=${properties["oracle.patch.fullpath"]}
+oracle_patch_directory=${properties["oracle.patch.directory"]}
+smtp_host=${properties["mail.smtp_host"]}
+mail_to=${properties["mail.mail_to"]}
+mail_from=${properties["mail.mail_from"]}
+teams_workflow=${properties["teams.workflow.tecinfra"]}
+
+echo "Tests the existence of oracle.opatch.fullpath and oracle.patch.fullpath"
+if [ -z "$oracle_opatch_fullpath" ] || [ -z "$oracle_patch_fullpath" ]; then
+	echo "ERREUR : les variables de configuration du script de patch oracle_opatch_fullpath et oracle_patch_fullpath sont vides : oracle_opatch_fullpath=$oracle_opatch_fullpath et oracle_patch_fullpath=$oracle_patch_fullpath"
+	exit 1
+fi
+
+echo "Tests the existence of oracle.opatch.fullpath"
+if [ ! -f "$oracle_opatch_fullpath" ] || [ ! -r "$oracle_opatch_fullpath" ]; then
+	echo "ERREUR : le fichier OPatch $oracle_opatch_fullpath n'existe pas ou bien n'a pas les permissions de lecture"
+	exit 1
+fi
+
+echo "Tests the existence of oracle.patch.fullpath"
+if [ ! -f "$oracle_patch_fullpath" ] || [ ! -r "$oracle_patch_fullpath" ]; then
+	echo "ERREUR : le fichier patch $oracle_patch_fullpath n'existe pas ou bien n'a pas les permissions de lecture"
+	exit 1
+fi
+
+echo "Teste l'exactitude de oracle.patch.directory"
+test_oracle_patch_directory=$(unzip -p $oracle_patch_fullpath $oracle_patch_directory/)
+if [ ! -z "$test_oracle_patch_directory" ]; then
+	echo "ERREUR : Le dossier $oracle_patch_directory n'a pas été trouvé dans le zip du patch. Vérifiez oracle.patch.directory dans la conf"
+	exit 1
+fi
+
+
+current_opatch_version=$(cat $ORACLE_HOME/OPatch/version.txt | cut -d ':' -f 2)
+echo "current_opatch_version=$current_opatch_version"
+new_opatch_version=$(unzip -p $oracle_opatch_fullpath OPatch/version.txt | cut -d ':' -f 2)
+echo "new_opatch_version=$new_opatch_version"
+
+
+if [ "$new_opatch_version" == "$current_opatch_version" ]; then
+	echo "No OPatch update, the current version is up to date"
+else
+	echo "Comparison between opatch versions: current=$current_opatch_version new=$new_opatch_version"
+	new_opatch_is_older=false
+	for i in 1 2 3 4 5
+	do
+		current_digit=$(echo $current_opatch_version | cut -d '.' -f $i)
+		new_digit=$(echo $new_opatch_version | cut -d '.' -f $i)
+		echo "comparaison entre new_digit=$new_digit et current_digit=$current_digit"
+		if [ "$new_digit" -lt "$current_digit" ]; then
+			new_opatch_is_older=true
+		fi
+	done
+	
+	if [ "$new_opatch_is_older" = true ]; then
+		echo "No OPatch update, the current version is more recent"
+	else
+		echo "Updating OPatch from $current_opatch_version to $new_opatch_version"
+		echo "mv $ORACLE_HOME/OPatch $ORACLE_HOME/OPatch.old.v${current_opatch_version}"
+		mv $ORACLE_HOME/OPatch $ORACLE_HOME/OPatch.old.v${current_opatch_version}
+		echo "unzip of the new OPatch :"
+		unzip $oracle_opatch_fullpath -d $ORACLE_HOME/
+	fi
+fi
+
+echo "Oracle listener stop"
+lsnrctl stop
+execute_sql_on_cdb "shutdown immediate;"
+
+if [ ! -d $ORACLE_BASE/patch ]; then
+    echo "Create patch folder in $ORACLE_BASE/ ==> $ORACLE_BASE/patch"
+	mkdir $ORACLE_BASE/patch
+fi
+
+echo "unzip -o $oracle_patch_fullpath -d $ORACLE_BASE/patch/"
+# unzip with the -o option to overwrite PatchSearch.xml, which is at the root of the patch zips
+# This avoids the question: replace /u01/app/oracle/patch/PatchSearch.xml? [y]es, [n]o, [A]ll, [N]one, [r]ename: y
+unzip -o $oracle_patch_fullpath -d $ORACLE_BASE/patch/
+cd $ORACLE_BASE/patch/$oracle_patch_directory/
+directories=$(cat README.html | grep -B 2 'opatch apply' | grep UNZIPPED_PATCH_LOCATION | grep -o -E '[1-9]*')
+i=0
+for dir in $directories; do
+	if [ "$i" = "1" ]; then
+		cd $dir;
+	fi
+	((i++)) 
+done # Move to the patch folder to perform an opatch apply
+echo "Current directory = $(pwd)"
+
+echo "opatch apply -jdk $ORACLE_HOME/jdk"
+
+##
+yes | opatch apply -jdk $ORACLE_HOME/jdk
+opatch_apply_result_code=$?
+##
+
+echo "opatch apply returned the result code: $opatch_apply_result_code"
+if [ ! "$?" = "0" ]; then
+	echo "ERROR: opatch apply failed!!!"
+	exit 1
+fi
+
+# We go back to initial directory
+cd $INITIAL_DIRECTORY
+
+execute_sql_on_cdb "startup;"
+execute_sql_on_cdb "select * from v\$timezone_file;"
+execute_sql_on_cdb "SELECT DBMS_DST.get_latest_timezone_version FROM   dual;"
+
+
+read -r -d '' prepare_for_upgrade_sql << EOM
+DECLARE
+  l_tz_version PLS_INTEGER;
+BEGIN
+  l_tz_version := DBMS_DST.get_latest_timezone_version;
+
+  DBMS_OUTPUT.put_line('l_tz_version=' || l_tz_version);
+  DBMS_DST.begin_prepare(l_tz_version);
+END;
+/
+EOM
+
+read -r -d '' upgrade_sql << EOM
+SET SERVEROUTPUT ON
+DECLARE
+  l_tz_version PLS_INTEGER;
+BEGIN
+  SELECT DBMS_DST.get_latest_timezone_version
+  INTO   l_tz_version
+  FROM   dual;
+
+  DBMS_OUTPUT.put_line('l_tz_version=' || l_tz_version);
+  DBMS_DST.begin_upgrade(l_tz_version);
+END;
+/
+EOM
+
+# Do the upgrade of the database file zone file and end upgrade.
+read -r -d '' end_upgrade_sql << EOM
+SET SERVEROUTPUT ON
+DECLARE
+  l_failures   PLS_INTEGER;
+BEGIN
+  DBMS_DST.upgrade_database(l_failures);
+  DBMS_OUTPUT.put_line('DBMS_DST.upgrade_database : l_failures=' || l_failures);
+  DBMS_DST.end_upgrade(l_failures);
+  DBMS_OUTPUT.put_line('DBMS_DST.end_upgrade : l_failures=' || l_failures);
+END;
+/
+EOM
+
+read -r -d '' display_result_pdb_sql << EOM
+COLUMN owner FORMAT A30
+COLUMN table_name FORMAT A30
+SELECT con_id,
+       owner,
+       table_name,
+       upgrade_in_progress
+FROM   cdb_tstz_tables
+ORDER BY 1,2,3;
+EOM
+
+read -r -d '' display_result_cdb_sql << EOM
+COLUMN owner FORMAT A30
+COLUMN table_name FORMAT A30
+SELECT owner,
+       table_name,
+       upgrade_in_progress
+FROM   dba_tstz_tables
+ORDER BY 1,2;
+EOM
+
+
+if [ "$db_contain_pdbs" = "true" ]; then
+	echo "Prepare for the upgrade:"
+	execute_sql_on_each_pdb "$prepare_for_upgrade_sql" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "TRUNCATE TABLE sys.dst\$affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "TRUNCATE TABLE sys.dst\$error_table;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "EXEC DBMS_DST.find_affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "SELECT * FROM sys.dst\$affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "SELECT * FROM sys.dst\$error_table;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "EXEC DBMS_DST.end_prepare;" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "alter pluggable database open upgrade;" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "$upgrade_sql" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "alter pluggable database open;" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "$end_upgrade_sql" "${pdbs[@]}"
+	execute_sql_on_each_pdb "$display_result_cdb_sql" "${pdbs[@]}"
+else
+	echo "Prepare for the upgrade:"
+	execute_sql_on_cdb "$prepare_for_upgrade_sql"
+
+	execute_sql_on_cdb "TRUNCATE TABLE sys.dst\$affected_tables;"
+	execute_sql_on_cdb "TRUNCATE TABLE sys.dst\$error_table;"
+	execute_sql_on_cdb "EXEC DBMS_DST.find_affected_tables;"
+	execute_sql_on_cdb "SELECT * FROM sys.dst\$affected_tables;"
+	execute_sql_on_cdb "SELECT * FROM sys.dst\$error_table;"
+	execute_sql_on_cdb "EXEC DBMS_DST.end_prepare;"
+
+	execute_sql_on_cdb "shutdown immediate;"
+	execute_sql_on_cdb "startup upgrade;"
+
+	execute_sql_on_each_pdb "$upgrade_sql"
+
+	execute_sql_on_cdb "shutdown immediate;"
+	execute_sql_on_cdb "startup;"
+
+	execute_sql_on_cdb "$end_upgrade_sql"
+	execute_sql_on_cdb "$display_result_pdb_sql"
+fi
+
+echo "Start the oracle listener"
+lsrnctl start
+
+
+lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
+echo "Wait for listener to be correctly started and list of services"
+count=0
+while [ ! -z "$lnrctl_status" ] && [ "$count" -lt "300" ]
+do
+	((count++))
+	sleep 1
+	echo "."
+	lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
+done
+echo "==============================================="
+echo "Success: End of application of the oracle patch"
+echo "==============================================="
+
+# We display TSTZ value for information after the update
+display_tstz_value db_contain_pdbs pdbs
+
+
+if [ ! -z "$smtp_host" ]; then
+	echo "An email is sent to inform you that the patch has been applied."
+	${BASEDIR}/lib/sendMail.sh $smtp_host $mail_from "'$mail_to'" "Patch oracle applied successfully" "Patch oracle applied successfully on host $HOSTNAME"
+fi
+if [ ! -z "$teams_workflow" ]; then
+	echo "Sends a Teams notification to inform you that the patch application has been completed"
+	send_blue_notification "$teams_workflow" "Patch oracle applied successfully" "Patch oracle applied successfully on host $HOSTNAME"
+fi

@@ -1,0 +1,174 @@
+#!/bin/bash
+# =============================================================================
+#  Author: Chu-Siang Lai / chusiang (at) drx.tw
+#  Filename: teams-chat-post-for-workflows.sh
+#  Modified: 2024-07-22 11:44 (UTC+08:00)
+#  Description: Post a message to Microsoft Teams via "Post to a chat when a webhook request is received" workflows.
+#  Reference:
+#
+#   - https://gist.github.com/chusiang/895f6406fbf9285c58ad0a3ace13d025
+#   - https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/
+#   - https://adaptivecards.io/explorer/
+#   - https://adaptivecards.io/designer/
+#
+# =============================================================================
+
+# Colour list here: https://adaptivecards.io/explorer/TextBlock.html
+THEMECOLOR_BLUE="dark"
+THEMECOLOR_ORANGE="warning"
+THEMECOLOR_GREEN="good"
+THEMECOLOR_RED="attention"
+
+
+function send()
+  {
+  # Help.
+  if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    echo 'Usage: teams-chat-post.sh "<webhook_url>" "<title>" "<color>" "<message>"'
+    exit 0
+  fi
+
+  echo "Début novrhTeamsNotification::send() - $(date)"
+
+  # Webhook or Token.
+  WEBHOOK_URL=$1
+  if [[ "${WEBHOOK_URL}" == "" ]]; then
+    echo "No webhook_url specified."
+    exit 1
+  fi
+  shift
+
+  # Title .
+  TITLE=$1
+  if [[ "${TITLE}" == "" ]]; then
+    echo "No title specified."
+    exit 1
+  fi
+  shift
+
+  # Color.
+  COLOR=$1
+  if [[ "${COLOR}" == "" ]]; then
+    echo "No status specified."
+    exit 1
+  fi
+  shift
+
+  # Text.
+  TEXT=$*
+  if [[ "${TEXT}" == "" ]]; then
+    echo "No text specified."
+    exit 1
+  fi
+
+  ATTACHMENTS=$*
+  if [[ "${TEXT}" == "" ]]; then
+    echo "No text specified."
+    exit 1
+  fi
+
+  # Escape double quotes for JSON formating and for shell variable evaluation
+  TITLE=$( echo "${TITLE}" | sed 's/"/\\"/g' )
+  # Escape double quotes for JSON formating and for shell variable evaluation
+  TEXT=$( echo "${TEXT}" | sed 's/"/\\"/g' )
+
+  # Adaptive Cards of TextBlock - https://adaptivecards.io/explorer/TextBlock.html
+  read -r -d '' JSON << EOM
+  {
+    "type": "message",
+    "attachments": [
+      {
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null,
+        "content": {
+          "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "type": "AdaptiveCard",
+          "version": "1.4",
+          "body": [
+            {
+              "type":   "TextBlock",
+              "text":   "${TITLE}",
+              "color":  "${COLOR}",
+              "weight": "bolder",
+              "size":   "large",
+              "wrap":   true
+            },
+            {
+              "type":   "TextBlock",
+              "text":   "${TEXT}",
+              "color":  "default",
+              "size":   "small",
+              "wrap":   true
+            }
+          ]
+        }
+      }
+    ]
+  }"
+EOM
+
+  echo "----------------------------------------"
+  echo "-----DEBUG TITLE NOTIFICATION TEAMS-----"
+  echo "----------------------------------------"
+  echo "${TITLE}"
+  echo "----------------------------------------"
+  echo "------DEBUG TEXT NOTIFICATION TEAMS-----"
+  echo "----------------------------------------"
+  echo "${TEXT}"
+  echo "----------------------------------------"
+  echo "----------------------------------------"
+
+
+
+  # Post to Microsoft Teams via curl.
+  curl \
+    --header "Content-Type: application/json" \
+    --request POST \
+    --data "${JSON}" \
+    "${WEBHOOK_URL}"
+}
+
+send_green_notification()
+{
+    local WEBHOOK_TEAMS=$1
+    shift
+    local TITLE=$1
+    shift
+    TEXT=$*
+
+    send "$WEBHOOK_TEAMS" "$TITLE" "$THEMECOLOR_GREEN" "$TEXT"
+}
+
+send_red_notification()
+{
+    local WEBHOOK_TEAMS=$1
+    shift
+    local TITLE=$1
+    shift
+    TEXT=$*
+
+    send "$WEBHOOK_TEAMS" "$TITLE" "$THEMECOLOR_RED" "$TEXT"
+}
+
+send_orange_notification()
+{
+    local WEBHOOK_TEAMS=$1
+    shift
+    local TITLE=$1
+    shift
+    TEXT=$*
+
+    send "$WEBHOOK_TEAMS" "$TITLE" "$THEMECOLOR_ORANGE" "$TEXT"
+}
+
+send_blue_notification()
+{
+    local WEBHOOK_TEAMS=$1
+    shift
+    local TITLE=$1
+    shift
+    TEXT=$*
+
+    send "$WEBHOOK_TEAMS" "$TITLE" "$THEMECOLOR_BLUE" "$TEXT"
+}
+
