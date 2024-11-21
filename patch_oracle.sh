@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$(whoami)" != "oracle" ]; then
-    echo "ERREUR : vous devez exécuter ce script en étant connecté en tant qu'utilisateur oracle"
+    echo "ERROR: you must run this script logged in as an oracle user"
 	exit 1
 fi
 
@@ -17,9 +17,9 @@ echo "Clean old logs"
 if [ ! -d $LOGSDIR ]; then
     mkdir -p $LOGSDIR
     touch ${LOGSDIR}/$LOGFILE
-    echo "$LOGSDIR n'existe pas => Création de $LOGSDIR" | tee -a ${LOGSDIR}/$LOGFILE
+    echo "$LOGSDIR doesn't exist => Creation of $LOGSDIR" | tee -a ${LOGSDIR}/$LOGFILE
 fi
 
-echo "Démarrage de patch_oracle.sh à $DATE" | tee -a ${LOGSDIR}/$LOGFILE
+echo "Start patch_oracle.sh at $DATE" | tee -a ${LOGSDIR}/$LOGFILE
 
 (${BASEDIR}/patch_oracle_core &>> ${LOGSDIR}/$LOGFILE &)
