@@ -1,7 +1,7 @@
 # Patch oracle database server
 
 ## Objective
-This script is aimed to automate the application of patch on oracle database server. It makes you gain some time if you have serveral managed oracle database server that you need to patch.
+This script is aimed to automate the application of patch on oracle database server. It makes you gain some time if you have several managed oracle database server that you need to patch.
 
 ## How it works
 This script executes the linux and sqlplus commands needed to apply the patch.
