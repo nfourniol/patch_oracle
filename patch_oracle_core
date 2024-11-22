@@ -98,16 +98,46 @@ fi
 display_tstz_value db_contain_pdbs pdbs
 
 echo "Disk space verification"
-DISK_FREE_LIMIT=$((1024*1024*11)) # 11 Go (by default 'df' display bytes)
-df=$(df -P)
-diskFree=$(echo "$df" | awk '{ print $4 " " $6 }' | grep -vE '^Filesystem|tmpfs|cdrom|/boot|/dev|/run|/home|/sys|/filer|/data636|/mnt|/refresh' | awk '{ print $1 }' | sed 1d)
-for dfree in $diskFree
-do
-	if [ $dfree -lt $DISK_FREE_LIMIT ]; then
-		echo "ERROR: the server needs at least 11Go disk free in order to execute the oracle patch"
-		exit 1
-	fi
-done
+# Configuration: Minimum size in GB required
+REQUIRED_SPACE_GB=11
+REQUIRED_SPACE_BYTES=$((REQUIRED_SPACE_GB * 1024 * 1024 * 1024))
+
+# Checks that the ORACLE_BASE and ORACLE_HOME variables are defined
+if [[ -z "$ORACLE_BASE" && -z "$ORACLE_HOME" ]]; then
+    echo "ERROR: ORACLE_BASE and ORACLE_HOME are not defined. Cannot proceed."
+    exit 1
+fi
+
+# Use ORACLE_BASE as priority, otherwise fallback to ORACLE_HOME
+ORACLE_DIR=${ORACLE_BASE:-$ORACLE_HOME}
+
+# Find the mount point associated with ORACLE_DIR
+MOUNT_POINT=$(df --output=target "$ORACLE_DIR" | tail -1)
+
+if [[ -z "$MOUNT_POINT" ]]; then
+    echo "ERROR: Unable to determine the mount point for $ORACLE_DIR."
+    exit 1
+fi
+
+echo "Oracle directory: $ORACLE_DIR"
+echo "Detected mount point: $MOUNT_POINT"
+
+# Recovers free space for the mount point
+AVAILABLE_BYTES=$(df --output=avail --block-size=1 "$MOUNT_POINT" | tail -1)
+
+if [[ -z "$AVAILABLE_BYTES" || "$AVAILABLE_BYTES" -eq 0 ]]; then
+    echo "ERROR: Unable to determine available space on $MOUNT_POINT."
+    exit 1
+fi
+
+echo "Available space on $MOUNT_POINT: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GB"
+
+# Check that there is enough space available
+if [[ $AVAILABLE_BYTES -lt $REQUIRED_SPACE_BYTES ]]; then
+    echo "ERROR: Insufficient disk space. At least ${REQUIRED_SPACE_GB}GB is required."
+    exit 1
+fi
+
 
 echo "Disk space is sufficient to apply the patch"
 echo "Check that the script is being executed as an oracle user"
@@ -157,26 +187,26 @@ teams_workflow=${properties["teams.workflow.tecinfra"]}
 
 echo "Tests the existence of oracle.opatch.fullpath and oracle.patch.fullpath"
 if [ -z "$oracle_opatch_fullpath" ] || [ -z "$oracle_patch_fullpath" ]; then
-	echo "ERREUR : les variables de configuration du script de patch oracle_opatch_fullpath et oracle_patch_fullpath sont vides : oracle_opatch_fullpath=$oracle_opatch_fullpath et oracle_patch_fullpath=$oracle_patch_fullpath"
+	echo "ERROR: the patch script configuration variables oracle_opatch_fullpath and oracle_patch_fullpath are empty: oracle_opatch_fullpath=$oracle_opatch_fullpath and oracle_patch_fullpath=$oracle_patch_fullpath"
 	exit 1
 fi
 
 echo "Tests the existence of oracle.opatch.fullpath"
 if [ ! -f "$oracle_opatch_fullpath" ] || [ ! -r "$oracle_opatch_fullpath" ]; then
-	echo "ERREUR : le fichier OPatch $oracle_opatch_fullpath n'existe pas ou bien n'a pas les permissions de lecture"
+	echo "ERROR: the OPatch file $oracle_opatch_fullpath does not exist or does not have read permissions"
 	exit 1
 fi
 
 echo "Tests the existence of oracle.patch.fullpath"
 if [ ! -f "$oracle_patch_fullpath" ] || [ ! -r "$oracle_patch_fullpath" ]; then
-	echo "ERREUR : le fichier patch $oracle_patch_fullpath n'existe pas ou bien n'a pas les permissions de lecture"
+	echo "ERROR: the patch file $oracle_patch_fullpath does not exist or does not have read permissions"
 	exit 1
 fi
 
 echo "Teste l'exactitude de oracle.patch.directory"
 test_oracle_patch_directory=$(unzip -p $oracle_patch_fullpath $oracle_patch_directory/)
 if [ ! -z "$test_oracle_patch_directory" ]; then
-	echo "ERREUR : Le dossier $oracle_patch_directory n'a pas été trouvé dans le zip du patch. Vérifiez oracle.patch.directory dans la conf"
+	echo "ERROR: The $oracle_patch_directory folder was not found in the patch zip. Check oracle.patch.directory in the conf"
 	exit 1
 fi
 
