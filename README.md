@@ -22,9 +22,6 @@ oracle.patch.directory ==> the directory that contains the whole patch and also 
 
 example: oracle.patch.directory=36233126, 36233126 is the main directory inside p36233126_190000_Linux-x86-64_tstz43.zip. I didn't find another solution to find the right directory inside p36233126_190000_Linux-x86-64_tstz43.zip, but I you find a better solution, please submit it!
 
-## Troubleshoot
-At present, the Teams notification section is not fully functional, and an error needs to be corrected.
-
 ## Sources used as references for writing this script
 
 [Upgrade of database time zone](https://oracle-base.com/articles/misc/update-database-time-zone-file)
