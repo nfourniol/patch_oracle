@@ -1,7 +1,7 @@
-# Patch oracle database server
+# Upgrade of database time zone using OPatch on oracle database server
 
 ## Objective
-This script is aimed to automate the application of patch on Linux oracle database servers. It makes you gain some time if you have several managed oracle database server that you need to patch.
+This script is aimed to automate the upgrade of database time zone using OPatch on oracle database server. It makes you gain some time if you have serveral managed oracle database server that you need to patch.
 
 ## How it works
 This script executes the linux and sqlplus commands needed to apply the patch.
@@ -22,27 +22,9 @@ oracle.patch.directory ==> the directory that contains the whole patch and also 
 
 example: oracle.patch.directory=36233126, 36233126 is the main directory inside p36233126_190000_Linux-x86-64_tstz43.zip. I didn't find another solution to find the right directory inside p36233126_190000_Linux-x86-64_tstz43.zip, but I you find a better solution, please submit it!
 
-## How to execute it
-Deploy the sources of this project in a folder accessible by the oracle user of your linux server.
-
-ssh to your oracle user.
-
-Then execute:
-```
-chmod u+x *.sh
-chmod u+x patch_oracle_core
-```
-
-Create the patch_oracle.conf file if you haven't already created it (create it at the root of the project sources):
-```
-cp patch_oracle.conf.sample patch_oracle.conf
-```
-Edit this file and configure it.
-
-Now you can execute the script:
-```
-./patch_oracle.sh
-```
-
 ## Troubleshoot
 At present, the Teams notification section is not fully functional, and an error needs to be corrected.
+
+## Sources used as references for writing this script
+
+[Upgrade of database time zone](https://oracle-base.com/articles/misc/update-database-time-zone-file)
