@@ -61,12 +61,6 @@ function send()
     exit 1
   fi
 
-  ATTACHMENTS=$*
-  if [[ "${TEXT}" == "" ]]; then
-    echo "No text specified."
-    exit 1
-  fi
-
   # Escape double quotes for JSON formating and for shell variable evaluation
   TITLE=$( echo "${TITLE}" | sed 's/"/\\"/g' )
   # Escape double quotes for JSON formating and for shell variable evaluation
