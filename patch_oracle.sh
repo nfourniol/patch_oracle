@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$(whoami)" != "oracle" ]; then
-    echo "ERROR: you must run this script logged in as an oracle user"
+    	echo "ERROR: you must run this script logged in as an oracle user"
 	exit 1
 fi
 
