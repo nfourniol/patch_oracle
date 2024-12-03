@@ -84,10 +84,10 @@ if [ ! -z "$pdb" ]; then
     do
         ((step+=2))
         pdb=$(echo $pdbs | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
-	    pdbs+=("$pdb")
+	pdbs+=("$pdb")
 
-		echo "-----------------------"
-	    echo "Another PDB was found : $pdb"
+	echo "-----------------------"
+	echo "Another PDB was found : $pdb"
     done
 else
 	echo "This CDB doesn't contain PDB"
@@ -142,7 +142,7 @@ fi
 echo "Disk space is sufficient to apply the patch"
 echo "Check that the script is being executed as an oracle user"
 if [ "$(whoami)" != "oracle" ]; then
-    echo "ERROR: you should execute this script as an oracle user"
+    	echo "ERROR: you should execute this script as an oracle user"
 	exit 1
 fi
 
@@ -248,7 +248,7 @@ lsnrctl stop
 execute_sql_on_cdb "shutdown immediate;"
 
 if [ ! -d $ORACLE_BASE/patch ]; then
-    echo "Create patch folder in $ORACLE_BASE/ ==> $ORACLE_BASE/patch"
+    	echo "Create patch folder in $ORACLE_BASE/ ==> $ORACLE_BASE/patch"
 	mkdir $ORACLE_BASE/patch
 fi
 
