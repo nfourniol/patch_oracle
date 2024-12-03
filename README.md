@@ -20,7 +20,9 @@ oracle.patch.fullpath ==> the full path to the patch for the oracle database ser
 
 oracle.patch.directory ==> the directory that contains the whole patch and also container README.html (example: 36233126)
 
-example: oracle.patch.directory=36233126, 36233126 is the main directory inside p36233126_190000_Linux-x86-64_tstz43.zip. I didn't find another solution to find the right directory inside p36233126_190000_Linux-x86-64_tstz43.zip, but I you find a better solution, please submit it!
+example: oracle.patch.directory=36233126
+
+36233126 is the main directory inside p36233126_190000_Linux-x86-64_tstz43.zip. I didn't find another solution to find the right directory inside p36233126_190000_Linux-x86-64_tstz43.zip, but I you find a better solution, please submit it!
 
 ## Sources used as references for writing this script
 
