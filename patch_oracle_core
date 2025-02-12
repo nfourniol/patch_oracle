@@ -18,7 +18,8 @@ function execute_sql_on_cdb() {
 function execute_sql_on_each_pdb() {
 	# Execute SQL on each pluggable database
 	local sql="$1"
-	local pdbs_array="$2"
+	shift # We remove the first argument (sql argument)
+	local pdbs_array=("$@") # we build an array with the remaining arguments
 
 	for pdb in "${pdbs_array[@]}";
 	do
@@ -39,7 +40,8 @@ function get_tstz_value() {
 
 function display_tstz_value() {
 	local contain_pdb="$1"
-	local pdbs_array="$2"
+	shift # We remove the first argument (sql argument)
+	local pdbs_array=("$@") # we build an array with the remaining arguments
 
 	echo "================================================================"
 	echo "=== Display TSTZ value"
@@ -64,7 +66,8 @@ function display_tstz_value() {
 
 # Query to detect each pdb
 pdbs_query_result=$(echo "select 'x==x' || name || 'x==x' from v\$pdbs;" | sqlplus / as sysdba)
-pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -F 'x==x' '{print $2}')
+step=2 # all the pdb are browsed, even PDB$SEED since it is used as a template by oracle when a new pdb is created
+pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
 db_contain_pdbs=false
 pdbs=() # We define an empty array of pdb
 if [ ! -z "$pdb" ]; then
@@ -73,21 +76,14 @@ if [ ! -z "$pdb" ]; then
 	echo "The database server contains one or more PDB"
 	echo "The first PDB found is $pdb"
 
-	# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
-   	export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
-
-	# 
-	# all the pdb are browsed, even PDB$SEED since it is used as a template by oracle when a new pdb is created
-    pdbs+=("$pdb")
-    step=2
     while [ ! -z "$pdb" ]
     do
+		echo "PDB found : $pdb"
+		pdbs+=("$pdb")
+
+
         ((step+=2))
         pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
-	    pdbs+=("$pdb")
-
-		echo "-----------------------"
-		echo "Another PDB was found : $pdb"
     done
 else
 	echo "This CDB doesn't contain PDB"
@@ -95,7 +91,7 @@ else
 fi
 
 # We display TSTZ value for information before the update
-display_tstz_value db_contain_pdbs pdbs
+display_tstz_value $db_contain_pdbs "${pdbs[@]}"
 
 echo "Disk space verification"
 # Configuration: Minimum size in GB required
@@ -333,26 +329,7 @@ END;
 /
 EOM
 
-read -r -d '' display_result_pdb_sql << EOM
-COLUMN owner FORMAT A30
-COLUMN table_name FORMAT A30
-SELECT con_id,
-       owner,
-       table_name,
-       upgrade_in_progress
-FROM   cdb_tstz_tables
-ORDER BY 1,2,3;
-EOM
 
-read -r -d '' display_result_cdb_sql << EOM
-COLUMN owner FORMAT A30
-COLUMN table_name FORMAT A30
-SELECT owner,
-       table_name,
-       upgrade_in_progress
-FROM   dba_tstz_tables
-ORDER BY 1,2;
-EOM
 
 
 if [ "$db_contain_pdbs" = "true" ]; then
@@ -418,7 +395,7 @@ echo "Success: End of application of the oracle patch"
 echo "==============================================="
 
 # We display TSTZ value for information after the update
-display_tstz_value db_contain_pdbs pdbs
+display_tstz_value $db_contain_pdbs "${pdbs[@]}"
 
 
 if [ ! -z "$smtp_host" ]; then
