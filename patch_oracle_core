@@ -83,7 +83,7 @@ if [ ! -z "$pdb" ]; then
     while [ ! -z "$pdb" ]
     do
         ((step+=2))
-        pdb=$(echo $pdbs | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
+        pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
 	    pdbs+=("$pdb")
 
 		echo "-----------------------"
@@ -210,6 +210,10 @@ if [ ! -z "$test_oracle_patch_directory" ]; then
 	exit 1
 fi
 
+# Environment variables that should be set
+export PATH=$ORACLE_HOME/bin:$PATH:$ORACLE_HOME/OPatch
+export LD_LIBRARY_PATH=$ORACLE_HOME/lib:/lib:/usr/lib
+export CLASSPATH=$ORACLE_HOME/jlib:$ORACLE_HOME/rdbms/jlib
 
 current_opatch_version=$(cat $ORACLE_HOME/OPatch/version.txt | cut -d ':' -f 2)
 echo "current_opatch_version=$current_opatch_version"
@@ -396,7 +400,7 @@ else
 fi
 
 echo "Start the oracle listener"
-lsrnctl start
+lsnrctl start
 
 
 lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
