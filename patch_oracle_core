@@ -1,8 +1,10 @@
 #!/bin/bash
 
 source ~/.bash_profile
-BASEDIR=$(dirname $0)
-INITIAL_DIRECTORY=$(pwd)
+readonly BASEDIR=$(dirname $0)
+readonly INITIAL_DIRECTORY=$(pwd)
+readonly PID=$$ # ID du process exécutant refreshAutoCore
+readonly TYPE_ERROR="ERROR"
 
 # We load sources for Teams notification
 source $BASEDIR/lib/teamsNotification
@@ -181,29 +183,70 @@ mail_to=${properties["mail.mail_to"]}
 mail_from=${properties["mail.mail_from"]}
 teams_workflow=${properties["teams.workflow.tecinfra"]}
 
+endPatch() {
+    # This funtion should be the last treatment executed
+
+	type=$1
+	msg=$2
+
+	object="Patch successfully applied on host $HOSTNAME"
+	if [ "$type" == "$TYPE_ERROR" ]; then
+		object="Patch oracle error application on host $HOSTNAME"
+	fi
+
+	if [ ! -z "$smtp_host" ]; then
+		echo "An email is sent to inform you that '$object'"
+		${BASEDIR}/lib/sendMail.sh $smtp_host $mail_from "'$mail_to'" "$object" "$msg"
+	fi
+	if [ ! -z "$teams_workflow" ]; then
+		echo "Sends a Teams notification to inform you that '$object'"
+		send_blue_notification "$teams_workflow" "$msg"
+	fi
+
+	echo "Delete the PID file : $PID.patch_oracle"
+    rm -f $BASEDIR/$PID.patch_oracle
+
+	if [ "$type" == "$TYPE_ERROR" ]; then
+		exit 1
+    else
+		exit 0
+    fi
+}
+
+startPatch() {
+    # This funtion is used to create $PID.patch_oracle file
+    local testAlreadyOnePatchExecution
+    testAlreadyOnePatchExecution=$(ls | grep -E '[0-9]+\.patch_oracle')
+    if [ ! -z "$testAlreadyOnePatchExecution" ]; then
+        echo "ERROR $testAlreadyOnePatchExecution found"
+        endPatch $TYPE_ERROR "ERROR $testAlreadyOnePatchExecution found: there is another patch_oracle that is currently executed"
+    else
+        echo "Patch process started. Process ID = $PID"
+        touch $BASEDIR/$PID.patch_oracle
+    fi
+}
+
+startPatch
+
 echo "Tests the existence of oracle.opatch.fullpath and oracle.patch.fullpath"
 if [ -z "$oracle_opatch_fullpath" ] || [ -z "$oracle_patch_fullpath" ]; then
-	echo "ERROR: the patch script configuration variables oracle_opatch_fullpath and oracle_patch_fullpath are empty: oracle_opatch_fullpath=$oracle_opatch_fullpath and oracle_patch_fullpath=$oracle_patch_fullpath"
-	exit 1
+	endPatch "$TYPE_ERROR" "ERROR: the patch script configuration variables oracle_opatch_fullpath and oracle_patch_fullpath are empty: oracle_opatch_fullpath=$oracle_opatch_fullpath and oracle_patch_fullpath=$oracle_patch_fullpath"
 fi
 
 echo "Tests the existence of oracle.opatch.fullpath"
 if [ ! -f "$oracle_opatch_fullpath" ] || [ ! -r "$oracle_opatch_fullpath" ]; then
-	echo "ERROR: the OPatch file $oracle_opatch_fullpath does not exist or does not have read permissions"
-	exit 1
+	endPatch "$TYPE_ERROR" "ERROR: the OPatch file $oracle_opatch_fullpath does not exist or does not have read permissions"
 fi
 
 echo "Tests the existence of oracle.patch.fullpath"
 if [ ! -f "$oracle_patch_fullpath" ] || [ ! -r "$oracle_patch_fullpath" ]; then
-	echo "ERROR: the patch file $oracle_patch_fullpath does not exist or does not have read permissions"
-	exit 1
+	endPatch "$TYPE_ERROR" "ERROR: the patch file $oracle_patch_fullpath does not exist or does not have read permissions"
 fi
 
 echo "Teste l'exactitude de oracle.patch.directory"
 test_oracle_patch_directory=$(unzip -p $oracle_patch_fullpath $oracle_patch_directory/)
 if [ ! -z "$test_oracle_patch_directory" ]; then
-	echo "ERROR: The $oracle_patch_directory folder was not found in the patch zip. Check oracle.patch.directory in the conf"
-	exit 1
+	endPatch "$TYPE_ERROR" "ERROR: The $oracle_patch_directory folder was not found in the patch zip. Check oracle.patch.directory in the conf"
 fi
 
 # Environment variables that should be set
@@ -248,7 +291,7 @@ lsnrctl stop
 execute_sql_on_cdb "shutdown immediate;"
 
 if [ ! -d $ORACLE_BASE/patch ]; then
-    	echo "Create patch folder in $ORACLE_BASE/ ==> $ORACLE_BASE/patch"
+    echo "Create patch folder in $ORACLE_BASE/ ==> $ORACLE_BASE/patch"
 	mkdir $ORACLE_BASE/patch
 fi
 
@@ -276,8 +319,7 @@ opatch_apply_result_code=$?
 
 echo "opatch apply returned the result code: $opatch_apply_result_code"
 if [ ! "$?" = "0" ]; then
-	echo "ERROR: opatch apply failed!!!"
-	exit 1
+	endPatch "$TYPE_ERROR" "ERROR: opatch apply failed!!!"
 fi
 
 # We go back to initial directory
@@ -346,6 +388,8 @@ if [ "$db_contain_pdbs" = "true" ]; then
 	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
 	execute_sql_on_each_pdb "alter pluggable database open upgrade;" "${pdbs[@]}"
 
+	echo "We will upgrade l_tz_version to :"
+	execute_sql_on_each_pdb "select DBMS_DST.get_latest_timezone_version from dual;" "${pdbs[@]}"
 	execute_sql_on_each_pdb "$upgrade_sql" "${pdbs[@]}"
 
 	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
@@ -367,7 +411,9 @@ else
 	execute_sql_on_cdb "shutdown immediate;"
 	execute_sql_on_cdb "startup upgrade;"
 
-	execute_sql_on_each_pdb "$upgrade_sql"
+	echo "We will upgrade l_tz_version to :"
+	execute_sql_on_cdb "select DBMS_DST.get_latest_timezone_version from dual;"
+	execute_sql_on_cdb "$upgrade_sql"
 
 	execute_sql_on_cdb "shutdown immediate;"
 	execute_sql_on_cdb "startup;"
@@ -387,7 +433,7 @@ while [ ! -z "$lnrctl_status" ] && [ "$count" -lt "300" ]
 do
 	((count++))
 	sleep 1
-	echo "."
+	echo -n "."
 	lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
 done
 echo "==============================================="
@@ -397,12 +443,4 @@ echo "==============================================="
 # We display TSTZ value for information after the update
 display_tstz_value $db_contain_pdbs "${pdbs[@]}"
 
-
-if [ ! -z "$smtp_host" ]; then
-	echo "An email is sent to inform you that the patch has been applied."
-	${BASEDIR}/lib/sendMail.sh $smtp_host $mail_from "'$mail_to'" "Patch oracle applied successfully" "Patch oracle applied successfully on host $HOSTNAME"
-fi
-if [ ! -z "$teams_workflow" ]; then
-	echo "Sends a Teams notification to inform you that the patch application has been completed"
-	send_blue_notification "$teams_workflow" "Patch oracle applied successfully" "Patch oracle applied successfully on host $HOSTNAME"
-fi
+endPatch "Success" "Success: End of application of the oracle patch"

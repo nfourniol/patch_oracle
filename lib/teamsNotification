@@ -13,7 +13,7 @@
 #
 # =============================================================================
 
-# Colour list here: https://adaptivecards.io/explorer/TextBlock.html
+# Liste des couleurs disponibles ici : https://adaptivecards.io/explorer/TextBlock.html
 THEMECOLOR_BLUE="dark"
 THEMECOLOR_ORANGE="warning"
 THEMECOLOR_GREEN="good"
@@ -29,6 +29,7 @@ function send()
   fi
 
   echo "Début novrhTeamsNotification::send() - $(date)"
+  #echo "Paramètre passés à novrhTeamsNotification::send() => WEBHOOK_URL=$1, TITLE=$2, COLOR=$3, TEXT=${*:4}"
 
   # Webhook or Token.
   WEBHOOK_URL=$1
@@ -57,9 +58,16 @@ function send()
   # Text.
   TEXT=$*
   if [[ "${TEXT}" == "" ]]; then
-    echo "No text specified."
-    exit 1
+    TEXT="No text specified."
+    echo "TEXT=$TEXT"
   fi
+
+
+  # Les escapes suivants sont les nouveaux proposés par le développeur. Pour le moment je ne les active pas
+  # je laisse les anciens que j'avais écrit moi
+  #TITLE=$( echo "${TITLE}" | sed 's/"/\\"/g' )
+  # Escape char: `'`, `"`, `\` .
+  #MESSAGE=$(echo ${TEXT} | sed "s/'/\'/g" | sed 's/"/\"/g; s/\\/\\\\/g')
 
   # Escape double quotes for JSON formating and for shell variable evaluation
   TITLE=$( echo "${TITLE}" | sed 's/"/\\"/g' )
@@ -166,3 +174,44 @@ send_blue_notification()
     send "$WEBHOOK_TEAMS" "$TITLE" "$THEMECOLOR_BLUE" "$TEXT"
 }
 
+
+test_notifications()
+{
+
+  #
+  WEBHOOK_TEAMS_INFRA="https://prod-59.westeurope.logic.azure.com:443/workflows/81f5b4848ab14b4d845931223accc749/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=v7F3bIuGLSCERGUAPAwa-MvK0gXKVY7oWS_7liciaD0"
+  NOM_CLIENT=FAKE_CLIENT
+  ENVIRONNEMENT=TEST
+  refreshType="déclenché manuellement"
+  WITH_SIMU=1
+  WITH_GTA=1
+
+
+  # Mise en forme du titre de notification
+  titleNotificationEndRefresh="RefreshAuto, $refreshType, client $NOM_CLIENT environnement $ENVIRONNEMENT"
+  if [ $WITH_SIMU = 1 ]; then
+      titleNotificationEndRefresh="$titleNotificationEndRefresh (+ refresh du schéma simu budgétaire)"
+  fi
+  if [ $WITH_GTA = 1 ]; then
+      titleNotificationEndRefresh="$titleNotificationEndRefresh (+ refresh du schéma GTA)"
+  fi
+  titleNotificationEndRefresh="[$titleNotificationEndRefresh]"
+
+  echo "title = $titleNotificationEndRefresh"
+
+  echo "Test send_red_notification"
+  notifMsgContent="ERREUR le fichier blabla n'est pas présent dans le dossier blabla (TEST RED NOTIFICATION)"
+  send_red_notification "$WEBHOOK_TEAMS_INFRA" "$titleNotificationEndRefresh" "$notifMsgContent"
+
+  echo "Test send_blue_notification"
+  notifMsgContent="START Démarrage du refresh blabla (TEST BLUE NOTIFICATION)"
+  send_blue_notification "$WEBHOOK_TEAMS_INFRA" "$titleNotificationEndRefresh" "$notifMsgContent"
+
+  echo "Test send_orange_notification"
+  send_orange_notification "$WEBHOOK_TEAMS_INFRA" "[RefreshAuto $NOM_CLIENT $ENVIRONNEMENT] Problème de Tablespace à résoudre" "ORA-39171 ; ORA-01691 ; ORA-01653 ; Problème de TABLESPACE (TEST ORANGE NOTIFICATION)"
+
+  echo "Test send_green_notification"
+  titleNotificationEndRefresh="$titleNotificationEndRefresh Terminé avec succès : import du dump $DUMPFILE"
+  notifMsgContent="Terminé avec succès (TEST GREEN NOTIFICATION)"
+  send_green_notification "$WEBHOOK_TEAMS_INFRA" "$titleNotificationEndRefresh" "$notifMsgContent"
+}
