@@ -33,6 +33,59 @@ function execute_sql_on_each_pdb() {
 	done
 }
 
+# Close and open in upgrade mode each pdb
+function open_upgrade_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql1=""
+    local sql2=""
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+        if [ "$pdb" = "PDB\$SEED" ]; then
+            # By default PDB$SEED is READ-ONLY, then to modify it we must set it to READ WRITE mode temporarily
+            sql1="ALTER PLUGGABLE DATABASE PDB\$SEED CLOSE;"
+            sql2="ALTER PLUGGABLE DATABASE PDB\$SEED OPEN READ WRITE;"
+        else
+            sql1="alter pluggable database close;"
+            sql2="alter pluggable database open upgrade;"
+        fi
+		echo "$sql1"
+		echo "$sql1" | sqlplus / as sysdba
+        echo "$sql2"
+		echo "$sql2" | sqlplus / as sysdba
+	done
+}
+
+# Close and open each pdb (return in normal mode, after having set to upgrade mode)
+function open_normal_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql1=""
+    local sql2=""
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+        if [ "$pdb" = "PDB\$SEED" ]; then
+            sql1="ALTER PLUGGABLE DATABASE PDB\$SEED CLOSE;"
+            sql2="ALTER PLUGGABLE DATABASE PDB\$SEED OPEN READ ONLY;"
+        else
+            sql1="alter pluggable database close;"
+            sql2="alter pluggable database open;"
+        fi
+		echo "$sql1"
+		echo "$sql1" | sqlplus / as sysdba
+        echo "$sql2"
+		echo "$sql2" | sqlplus / as sysdba
+	done
+}
+
 function get_tstz_value() {
 	tstz_query=$(echo "select 'x==x' || version || 'x==x' from v\$timezone_file;" | sqlplus / as sysdba)
 	tstz_value=$(echo $tstz_query | awk -F'SQL>' '{print $2}' | awk -F 'x==x' '{print $2}')
@@ -97,7 +150,7 @@ display_tstz_value $db_contain_pdbs "${pdbs[@]}"
 
 echo "Disk space verification"
 # Configuration: Minimum size in GB required
-REQUIRED_SPACE_GB=11
+REQUIRED_SPACE_GB=15
 REQUIRED_SPACE_BYTES=$((REQUIRED_SPACE_GB * 1024 * 1024 * 1024))
 
 # Checks that the ORACLE_BASE and ORACLE_HOME variables are defined
@@ -385,15 +438,13 @@ if [ "$db_contain_pdbs" = "true" ]; then
 	execute_sql_on_each_pdb "SELECT * FROM sys.dst\$error_table;" "${pdbs[@]}"
 	execute_sql_on_each_pdb "EXEC DBMS_DST.end_prepare;" "${pdbs[@]}"
 
-	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
-	execute_sql_on_each_pdb "alter pluggable database open upgrade;" "${pdbs[@]}"
+	open_upgrade_each_pdb "${pdbs[@]}"
 
 	echo "We will upgrade l_tz_version to :"
 	execute_sql_on_each_pdb "select DBMS_DST.get_latest_timezone_version from dual;" "${pdbs[@]}"
 	execute_sql_on_each_pdb "$upgrade_sql" "${pdbs[@]}"
 
-	execute_sql_on_each_pdb "alter pluggable database close;" "${pdbs[@]}"
-	execute_sql_on_each_pdb "alter pluggable database open;" "${pdbs[@]}"
+	open_normal_each_pdb "${pdbs[@]}"
 
 	execute_sql_on_each_pdb "$end_upgrade_sql" "${pdbs[@]}"
 	execute_sql_on_each_pdb "$display_result_cdb_sql" "${pdbs[@]}"
@@ -436,6 +487,12 @@ do
 	echo -n "."
 	lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
 done
+echo "Patch was applied with success. Now we clean disk from the unzip patch: rm -rf $ORACLE_BASE/patch/$oracle_patch_directory"
+rm -rf $ORACLE_BASE/patch/$oracle_patch_directory
+
+if [ -d $ORACLE_HOME/OPatch.old.v${current_opatch_version} ]; then
+	echo "!!! you can remove $ORACLE_HOME/OPatch.old.v${current_opatch_version} to free space if you want !!!"
+fi
 echo "==============================================="
 echo "Success: End of application of the oracle patch"
 echo "==============================================="
