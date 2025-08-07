@@ -1,0 +1,8 @@
+##
+# Optional properties:
+#   You can set these options to be notified when the patch has finished being applied
+##
+mail.smtp_host= # SMTP host
+mail.mail_to=nfourniol@gmail.com
+mail.mail_from=no-reply@gmail.com
+teams.workflow.tecinfra= # URL Workflow

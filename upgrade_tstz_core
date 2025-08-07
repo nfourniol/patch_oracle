@@ -1,0 +1,399 @@
+#!/bin/bash
+
+source ~/.bash_profile
+readonly BASEDIR=$(dirname $0)
+readonly PID=$$ # ID du process exécutant refreshAutoCore
+readonly TYPE_ERROR="ERROR"
+
+# We load sources for Teams notification
+source $BASEDIR/lib/teamsNotification
+
+
+function execute_sql_on_cdb() {
+	# Execute SQL on Container Database
+	local sql="$1"
+	echo "$sql"
+	echo "$sql" | sqlplus / as sysdba
+}
+
+function execute_sql_on_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql="$1"
+	shift # We remove the first argument (sql argument)
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+		echo "$sql"
+		echo "$sql" | sqlplus / as sysdba
+	done
+}
+
+# Close and open in upgrade mode each pdb
+function open_upgrade_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql1=""
+    local sql2=""
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+        sql1="alter pluggable database close;"
+        sql2="alter pluggable database open upgrade;"
+        
+		echo "$sql1"
+		echo "$sql1" | sqlplus / as sysdba
+        echo "$sql2"
+		echo "$sql2" | sqlplus / as sysdba
+	done
+}
+
+# Close and open each pdb (return in normal mode, after having set to upgrade mode)
+function open_normal_each_pdb() {
+	# Execute SQL on each pluggable database
+	local sql1=""
+    local sql2=""
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	for pdb in "${pdbs_array[@]}";
+	do
+		# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+   		export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+		echo "Executing SQL on pdb $pdb"
+		sql1="alter pluggable database close;"
+        if [ "$pdb" = "PDB\$SEED" ]; then
+            sql2="ALTER PLUGGABLE DATABASE OPEN READ WRITE;"
+        else
+            sql2="alter pluggable database open;"
+        fi
+		echo "$sql1"
+		echo "$sql1" | sqlplus / as sysdba
+        echo "$sql2"
+		echo "$sql2" | sqlplus / as sysdba
+	done
+}
+
+function open_readonly_pdbseed() {
+	echo "Set PDB$SEED back to READ ONLY mode (the normal mode for PDB\$SEED)"
+	local sql1="alter pluggable database PDB\$SEED OPEN READ ONLY;"
+   
+	echo "$sql1"
+	echo "$sql1" | sqlplus / as sysdba
+}
+
+
+function get_tstz_value() {
+	tstz_query=$(echo "select 'x==x' || version || 'x==x' from v\$timezone_file;" | sqlplus / as sysdba)
+	tstz_value=$(echo $tstz_query | awk -F'SQL>' '{print $2}' | awk -F 'x==x' '{print $2}')
+
+	echo "TSTZ value : $tstz_value"
+}
+
+function display_tstz_value() {
+	local contain_pdb="$1"
+	shift # We remove the first argument (sql argument)
+	local pdbs_array=("$@") # we build an array with the remaining arguments
+
+	echo "================================================================"
+	echo "=== Display TSTZ value"
+	echo "==="
+
+	if [ "$contain_pdb" = "true" ]; then
+		for pdb in "${pdbs_array[@]}";
+		do
+			# https://mikedietrichde.com/2020/07/13/pitfalls-connect-to-a-pdb-directly-with-oracle_pdb_sid/
+			export ORACLE_PDB_SID="$pdb" # This 'export' command line set the pluggable database on which we want to work
+			echo "===> pdb : $pdb <==="
+			get_tstz_value
+		done
+	else
+		echo "===> CDB <==="
+		get_tstz_value
+	fi
+
+	echo "==="
+	echo "================================================================"
+}
+
+function killAllOracleSessions()
+{
+    echo "..................................................."
+    echo "Kill des sessions actives pour tous les utilisateurs connectés"
+    # on exécute 2 fois la commandes car dans un cas si trop de lignes remontées les dernieres ne sont pas exec (à vérifier un jour)
+    echo "SELECT 'ALTER SYSTEM KILL SESSION '''||sid||','||serial#||''' IMMEDIATE;' FROM v\$session WHERE username IS NOT NULL;" | sqlplus / as sysdba | sqlplus / as sysdba
+    echo "SELECT 'ALTER SYSTEM KILL SESSION '''||sid||','||serial#||''' IMMEDIATE;' FROM v\$session WHERE username IS NOT NULL;" | sqlplus / as sysdba | sqlplus / as sysdba
+}
+
+# Query to detect each pdb
+pdbs_query_result=$(echo "select 'x==x' || name || 'x==x' from v\$pdbs;" | sqlplus / as sysdba)
+step=2 # all the pdb are browsed, even PDB$SEED since it is used as a template by oracle when a new pdb is created
+pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
+db_contain_pdbs=false
+pdbs=() # We define an empty array of pdb
+if [ ! -z "$pdb" ]; then
+	db_contain_pdbs=true
+
+	echo "The database server contains one or more PDB"
+	echo "The first PDB found is $pdb"
+
+    while [ ! -z "$pdb" ]
+    do
+		echo "PDB found : $pdb"
+		pdbs+=("$pdb")
+
+
+        ((step+=2))
+        pdb=$(echo $pdbs_query_result | awk -F'SQL>' '{print $2}' | awk -v stp="$step" -F 'x==x' '{print $stp}')
+    done
+else
+	echo "This CDB doesn't contain PDB"
+	get_tstz_value
+fi
+
+# We display TSTZ value for information before the update
+display_tstz_value $db_contain_pdbs "${pdbs[@]}"
+
+
+# Checks that the ORACLE_BASE and ORACLE_HOME variables are defined
+if [[ -z "$ORACLE_BASE" && -z "$ORACLE_HOME" ]]; then
+    echo "ERROR: ORACLE_BASE and ORACLE_HOME are not defined. Cannot proceed."
+    exit 1
+fi
+
+# Use ORACLE_BASE as priority, otherwise fallback to ORACLE_HOME
+ORACLE_DIR=${ORACLE_BASE:-$ORACLE_HOME}
+
+# Find the mount point associated with ORACLE_DIR
+MOUNT_POINT=$(df --output=target "$ORACLE_DIR" | tail -1)
+
+if [[ -z "$MOUNT_POINT" ]]; then
+    echo "ERROR: Unable to determine the mount point for $ORACLE_DIR."
+    exit 1
+fi
+
+echo "Oracle directory: $ORACLE_DIR"
+echo "Detected mount point: $MOUNT_POINT"
+
+echo "Check that the script is being executed as an oracle user"
+if [ "$(whoami)" != "oracle" ]; then
+    	echo "ERROR: you should execute this script as an oracle user"
+	exit 1
+fi
+
+echo "Tests the existence of ORACLE_BASE"
+if [ -z "$ORACLE_BASE" ] || [ ! -d "$ORACLE_BASE" ]; then
+	echo "ERROR: the environment variable ORACLE_BASE is incorrect: empty or targets on a non existing directory. ORACLE_BASE=$ORACLE_BASE"
+	exit 1
+fi
+
+echo "Tests the existence of ORACLE_HOME"
+if [ -z "$ORACLE_HOME" ] || [ ! -d "$ORACLE_HOME" ]; then
+	echo "ERROR: the environment variable ORACLE_HOME is incorrect: empty or targets on a non existing directory. ORACLE_HOME=$ORACLE_HOME"
+	exit 1
+fi
+
+echo "Tests the existence of upgrade_tstz.conf"
+if [ ! -f $BASEDIR/upgrade_tstz.conf ] || [ ! -r $BASEDIR/upgrade_tstz.conf ]; then
+	echo "ERROR: Impossible to read $BASEDIR/upgrade_tstz.conf"
+	exit 1
+fi
+
+
+echo "Read of $BASEDIR/upgrade_tstz.conf"
+declare -A properties
+configuration_file="$BASEDIR/upgrade_tstz.conf"
+while IFS='=' read -r key value; do
+    # Read of upgrade_tstz.conf (properties file), we remove comments of type # ... using the sed command
+    value=$(echo $value | sed 's/[[:space:]]//g' | sed 's/\#.*//g')
+    if [ ! -z "$key" ]; then # If a line is empty, then key is empty
+        properties["$key"]="$value"
+    fi
+done < "$configuration_file"
+
+echo "Extract values from $BASEDIR/upgrade_tstz.conf"
+smtp_host=${properties["mail.smtp_host"]}
+mail_to=${properties["mail.mail_to"]}
+mail_from=${properties["mail.mail_from"]}
+teams_workflow=${properties["teams.workflow.tecinfra"]}
+
+endUpgradeTstz() {
+    # This funtion should be the last treatment executed
+
+	type=$1
+	msg=$2
+
+	object="Upgrade tstz successfully applied on host $HOSTNAME"
+	if [ "$type" == "$TYPE_ERROR" ]; then
+		object="Upgrade tstz oracle error application on host $HOSTNAME"
+	fi
+
+	if [ ! -z "$smtp_host" ]; then
+		echo "An email is sent to inform you that '$object'"
+		${BASEDIR}/lib/sendMail.sh $smtp_host $mail_from "'$mail_to'" "$object" "$msg"
+	fi
+	if [ ! -z "$teams_workflow" ]; then
+		echo "Sends a Teams notification to inform you that '$object'"
+		send_blue_notification "$teams_workflow" "$msg"
+	fi
+
+	echo "Delete the PID file : $PID.upgrade_tstz"
+    rm -f $BASEDIR/$PID.upgrade_tstz
+
+	if [ "$type" == "$TYPE_ERROR" ]; then
+		exit 1
+    else
+		exit 0
+    fi
+}
+
+startUpgradeTstz() {
+    # This funtion is used to create $PID.upgrade_tstz file
+    local testAlreadyOneProcessExecution
+    testAlreadyOneProcessExecution=$(ls | grep -E '[0-9]+\.upgrade_tstz')
+    if [ ! -z "$testAlreadyOneProcessExecution" ]; then
+        echo "ERROR $testAlreadyOneProcessExecution found"
+        endUpgradeTstz $TYPE_ERROR "ERROR $testAlreadyOneProcessExecution found: there is another upgrade_tstz that is currently executed"
+    else
+        echo "upgrade_tstz process started. Process ID = $PID"
+        touch $BASEDIR/$PID.upgrade_tstz
+    fi
+
+	killAllOracleSessions
+}
+
+startUpgradeTstz
+
+
+# Environment variables that should be set
+export LD_LIBRARY_PATH=$ORACLE_HOME/lib:/lib:/usr/lib
+export CLASSPATH=$ORACLE_HOME/jlib:$ORACLE_HOME/rdbms/jlib
+
+
+execute_sql_on_cdb "select * from v\$timezone_file;"
+execute_sql_on_cdb "SELECT DBMS_DST.get_latest_timezone_version FROM   dual;"
+
+
+read -r -d '' prepare_for_upgrade_sql << EOM
+DECLARE
+  l_tz_version PLS_INTEGER;
+BEGIN
+  l_tz_version := DBMS_DST.get_latest_timezone_version;
+
+  DBMS_OUTPUT.put_line('l_tz_version=' || l_tz_version);
+  DBMS_DST.begin_prepare(l_tz_version);
+END;
+/
+EOM
+
+read -r -d '' upgrade_sql << EOM
+SET SERVEROUTPUT ON
+DECLARE
+  l_tz_version PLS_INTEGER;
+BEGIN
+  SELECT DBMS_DST.get_latest_timezone_version
+  INTO   l_tz_version
+  FROM   dual;
+
+  DBMS_OUTPUT.put_line('l_tz_version=' || l_tz_version);
+  DBMS_DST.begin_upgrade(l_tz_version);
+END;
+/
+EOM
+
+# Do the upgrade of the database file zone file and end upgrade.
+read -r -d '' end_upgrade_sql << EOM
+SET SERVEROUTPUT ON
+DECLARE
+  l_failures   PLS_INTEGER;
+BEGIN
+  DBMS_DST.upgrade_database(l_failures);
+  DBMS_OUTPUT.put_line('DBMS_DST.upgrade_database : l_failures=' || l_failures);
+  DBMS_DST.end_upgrade(l_failures);
+  DBMS_OUTPUT.put_line('DBMS_DST.end_upgrade : l_failures=' || l_failures);
+END;
+/
+EOM
+
+
+
+
+if [ "$db_contain_pdbs" = "true" ]; then
+	open_normal_each_pdb "${pdbs[@]}" # Ensure PDBs are open for write operations
+
+	echo "Prepare for the upgrade:"
+	execute_sql_on_each_pdb "$prepare_for_upgrade_sql" "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "TRUNCATE TABLE sys.dst\$affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "TRUNCATE TABLE sys.dst\$error_table;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "EXEC DBMS_DST.find_affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "SELECT * FROM sys.dst\$affected_tables;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "SELECT * FROM sys.dst\$error_table;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "EXEC DBMS_DST.end_prepare;" "${pdbs[@]}"
+
+	open_upgrade_each_pdb "${pdbs[@]}"
+
+	echo "We will upgrade l_tz_version to :"
+	execute_sql_on_each_pdb "select DBMS_DST.get_latest_timezone_version from dual;" "${pdbs[@]}"
+	execute_sql_on_each_pdb "$upgrade_sql" "${pdbs[@]}"
+
+	open_normal_each_pdb "${pdbs[@]}"
+
+	execute_sql_on_each_pdb "$end_upgrade_sql" "${pdbs[@]}"
+
+	open_readonly_pdbseed # ensure PDB$SEED stay in READ ONLY at the end of the tstz upgrade process
+
+	execute_sql_on_each_pdb "$display_result_cdb_sql" "${pdbs[@]}"
+else
+	echo "Prepare for the upgrade:"
+	execute_sql_on_cdb "$prepare_for_upgrade_sql"
+
+	execute_sql_on_cdb "TRUNCATE TABLE sys.dst\$affected_tables;"
+	execute_sql_on_cdb "TRUNCATE TABLE sys.dst\$error_table;"
+	execute_sql_on_cdb "EXEC DBMS_DST.find_affected_tables;"
+	execute_sql_on_cdb "SELECT * FROM sys.dst\$affected_tables;"
+	execute_sql_on_cdb "SELECT * FROM sys.dst\$error_table;"
+	execute_sql_on_cdb "EXEC DBMS_DST.end_prepare;"
+
+	execute_sql_on_cdb "shutdown immediate;"
+	execute_sql_on_cdb "startup upgrade;"
+
+	echo "We will upgrade l_tz_version to :"
+	execute_sql_on_cdb "select DBMS_DST.get_latest_timezone_version from dual;"
+	execute_sql_on_cdb "$upgrade_sql"
+
+	execute_sql_on_cdb "shutdown immediate;"
+	execute_sql_on_cdb "startup;"
+
+	execute_sql_on_cdb "$end_upgrade_sql"
+	execute_sql_on_cdb "$display_result_pdb_sql"
+fi
+
+echo "Start the oracle listener"
+lsnrctl start
+
+
+lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
+echo "Wait for listener to be correctly started and list of services"
+count=0
+while [ ! -z "$lnrctl_status" ] && [ "$count" -lt "300" ]
+do
+	((count++))
+	sleep 1
+	echo -n "."
+	lnrctl_status=$(lsnrctl status | grep "The listener supports no services")
+done
+
+echo "======================================================"
+echo "Success: End of application of the upgrade of the TSTZ"
+echo "======================================================"
+
+# We display TSTZ value for information after the update
+display_tstz_value $db_contain_pdbs "${pdbs[@]}"
+
+endUpgradeTstz "Success" "Success: End of the upgrade of the TSTZ"

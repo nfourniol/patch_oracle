@@ -1,5 +1,5 @@
-oracle.opatch.fullpath=/mnt/refresh/oracle_patch/p6880880_190000_LINUX.zip
-oracle.patch.fullpath=/mnt/refresh/oracle_patch/p36233126_190000_Linux-x86-64_tstz43.zip
+oracle.opatch.fullpath=/tmp/p6880880_190000_LINUX.zip
+oracle.patch.fullpath=/tmp/p36233126_190000_Linux-x86-64_tstz43.zip
 oracle.patch.directory=36233126 # root directory contained into the zip patch file = folder that contains the whole patch and also contains README.html
 ##
 # Optional properties:
