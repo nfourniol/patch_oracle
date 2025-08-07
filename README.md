@@ -1,4 +1,4 @@
-# Upgrade of database time zone using OPatch on oracle database server
+# Patch Oracle server and Upgrade of database TSTZ
 
 ## Objective
 Two scripts:
