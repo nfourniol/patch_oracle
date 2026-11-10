@@ -123,7 +123,8 @@ EOM
 
 
   # Post to Microsoft Teams via curl.
-  curl \
+  # --connect-timeout / --max-time: never block the calling script if Teams does not answer
+  curl --silent --show-error --connect-timeout 10 --max-time 60 \
     --header "Content-Type: application/json" \
     --request POST \
     --data "${JSON}" \
@@ -179,7 +180,7 @@ test_notifications()
 {
 
   #
-  WEBHOOK_TEAMS_INFRA="https://prod-59.westeurope.logic.azure.com:443/workflows/81f5b4848ab14b4d845931223accc749/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=v7F3bIuGLSCERGUAPAwa-MvK0gXKVY7oWS_7liciaD0"
+  WEBHOOK_TEAMS_INFRA="###"
   NOM_CLIENT=FAKE_CLIENT
   ENVIRONNEMENT=TEST
   refreshType="déclenché manuellement"

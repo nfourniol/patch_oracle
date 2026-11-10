@@ -20,6 +20,17 @@ if [ ! -d $LOGSDIR ]; then
     echo "$LOGSDIR doesn't exist => Creation of $LOGSDIR" | tee -a ${LOGSDIR}/$LOGFILE
 fi
 
+read -p "$(tput setaf 2) Warning, all applications connected to the database must be disconnected. Continue (yes or no)? $(tput sgr0)" answer
+case "${answer,,}" in # ${answer,,} = answer in lowercase
+    yes|y)
+        ;;
+    *)
+        echo "You have chosen not to continue"
+        exit 1
+        ;;
+esac
+
+
 echo "Start upgrade_tstz.sh at $DATE" | tee -a ${LOGSDIR}/$LOGFILE
 
 (${BASEDIR}/upgrade_tstz_core &>> ${LOGSDIR}/$LOGFILE &)

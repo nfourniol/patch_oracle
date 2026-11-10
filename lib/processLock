@@ -1,0 +1,69 @@
+#!/bin/bash
+# =============================================================================
+#  Lock based on a "<PID>.<extension>" file, used to guarantee that a script is
+#  not executed twice at the same time (e.g. 12345.patch_oracle).
+#
+#  Usage (the file must be sourced):
+#    source $BASEDIR/lib/processLock
+#    if acquire_process_lock "$BASEDIR" "patch_oracle" "$$" "patch_oracle_core"; then
+#        ... lock acquired: $PROCESS_LOCK_FILE is removed automatically on exit
+#    else
+#        ... another execution is running: see $PROCESS_LOCK_CONFLICT
+#    fi
+# =============================================================================
+
+PROCESS_LOCK_FILE=""
+PROCESS_LOCK_CONFLICT=""
+
+# Return 0 if the process <pid> is alive and is an execution of <script_name>.
+# Checking the command line (and not only 'kill -0') avoids considering a lock
+# as active when its PID has been reused by another process (the oracle user
+# owns many processes).
+function is_process_lock_alive() {
+	local pid="$1"
+	local script_name="$2"
+	ps -p "$pid" -o args= 2>/dev/null | grep -q "$script_name"
+}
+
+# acquire_process_lock <lock_directory> <extension> <pid> <script_name>
+#   Return 0 and create <lock_directory>/<pid>.<extension> if no other living
+#   execution of <script_name> holds a lock. Lock files of dead processes (e.g.
+#   killed with kill -9) are removed.
+#   Return 1 if another execution is running; PROCESS_LOCK_CONFLICT then contains
+#   the lock file(s) found.
+function acquire_process_lock() {
+	local lock_directory="$1"
+	local extension="$2"
+	local pid="$3"
+	local script_name="$4"
+	local lock_file
+	local other_pid
+
+	PROCESS_LOCK_CONFLICT=""
+	for lock_file in "$lock_directory"/*."$extension"; do
+		[ -e "$lock_file" ] || continue # no file matches the pattern
+		other_pid=$(basename "$lock_file" ".$extension")
+		[[ "$other_pid" =~ ^[0-9]+$ ]] || continue
+		[ "$other_pid" = "$pid" ] && continue
+
+		if is_process_lock_alive "$other_pid" "$script_name"; then
+			PROCESS_LOCK_CONFLICT="$PROCESS_LOCK_CONFLICT $lock_file"
+		else
+			echo "Lock file $lock_file belongs to process $other_pid which is no longer running: it is removed"
+			rm -f "$lock_file"
+		fi
+	done
+
+	if [ -n "$PROCESS_LOCK_CONFLICT" ]; then
+		return 1
+	fi
+
+	PROCESS_LOCK_FILE="$lock_directory/$pid.$extension"
+	touch "$PROCESS_LOCK_FILE"
+	# The lock file is removed whatever the way the script ends (exit, error, Ctrl+C, kill).
+	# Only 'kill -9' cannot be trapped: in that case, the lock file is removed by the
+	# next execution because the process is no longer alive (see above).
+	trap 'rm -f "$PROCESS_LOCK_FILE"' EXIT
+	trap 'exit 1' INT TERM
+	return 0
+}
